@@ -71,7 +71,10 @@ fn setup(gfx: &mut Graphics) -> State {
     State {
         font,
         grid,
-        agent: Agent { position: (0, 0) },
+        agent: Agent {
+            position: (0, 0),
+            size: (2, 2),
+        },
         mouse_pos: (0.0, 0.0),
         path: None,
     }
@@ -81,12 +84,13 @@ fn pathfind(state: &mut State, to: (i32, i32)) {
     let start_time = std::time::Instant::now();
     let start = state.agent.position;
     let grid = &state.grid;
+    let (agent_width, agent_height) = state.agent.size;
     let result = pathfinding::directed::astar::astar(
         &start,
         |p| {
             let mut neighbors = Vec::new();
             let (x, y) = *p;
-            for (dx, dy) in &[
+            'outer: for (dx, dy) in &[
                 (-1, 0),
                 (1, 0),
                 (0, -1),
@@ -104,16 +108,34 @@ fn pathfind(state: &mut State, to: (i32, i32)) {
                     && ny < grid.size.1
                     && !grid.is_cell_blocked(nx, ny)
                 {
-                    // additional check for diagonal movement
                     let diagonal = dx.abs() + dy.abs() == 2;
-                    if diagonal {
-                        if grid.is_cell_blocked(nx, y) || grid.is_cell_blocked(x, ny) {
-                            continue;
-                        }
-                        neighbors.push(((nx, ny), 14));
-                    } else {
-                        neighbors.push(((nx, ny), 10));
+                    let cost = if diagonal { 14 } else { 10 };
+
+                    // check if the agent can fit in the cell
+                    if nx + agent_width > grid.size.0 || ny + agent_height > grid.size.1 {
+                        continue;
                     }
+                    for i in nx..nx + agent_width {
+                        for j in ny..ny + agent_height {
+                            if grid.is_cell_blocked(i, j) {
+                                continue 'outer;
+                            }
+                        }
+                    }
+
+                    // additional check for diagonal movement
+                    for i in 0..agent_width {
+                        for j in 0..agent_height {
+                            if grid.is_cell_blocked(nx + i, y + j) {
+                                continue 'outer;
+                            }
+                            if grid.is_cell_blocked(x + i, ny + j) {
+                                continue 'outer;
+                            }
+                        }
+                    }
+
+                    neighbors.push(((nx, ny), cost));
                 }
             }
             neighbors
@@ -204,14 +226,19 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
 
     // Draw the agent
     let (x, y) = state.agent.position;
-    draw.rect(
-        (
-            x as f32 * state.grid.cell_size,
-            y as f32 * state.grid.cell_size,
-        ),
-        (state.grid.cell_size, state.grid.cell_size),
-    )
-    .color(Color::RED);
+    let (agent_width, agent_height) = state.agent.size;
+    for x in x..x + agent_width {
+        for y in y..y + agent_height {
+            draw.rect(
+                (
+                    x as f32 * state.grid.cell_size,
+                    y as f32 * state.grid.cell_size,
+                ),
+                (state.grid.cell_size, state.grid.cell_size),
+            )
+            .color(Color::RED);
+        }
+    }
 
     // Draw the path
     if let Some(path) = &state.path {
