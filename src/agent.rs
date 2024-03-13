@@ -1,26 +1,28 @@
 use notan::{
     app::Color,
     draw::{Draw, DrawShapes, DrawTransform},
-    math::{Affine2, Mat3, Vec2},
+    math::{Affine2, IVec2, Mat3, Vec2},
 };
 
 pub struct Agent {
-    pub position: Vec2,
+    pub position: IVec2,
     pub size: Vec2,
-    /// Rotation in radians.
-    pub rotation: f32,
+    /// Rotation in increments.
+    pub rotation: i16,
+    pub max_increments: u16,
 }
 
 impl Agent {
-    pub fn new(position: Vec2, size: Vec2) -> Self {
+    pub fn new(position: IVec2, size: Vec2, rotation: i16, max_increments: u16) -> Self {
         Self {
             position,
             size,
-            rotation: 0.0,
+            rotation,
+            max_increments,
         }
     }
 
-    pub fn footprint(&self, position: Vec2, rotation: f32) -> Vec<Vec2> {
+    pub fn footprint(&self, position: IVec2, rotation: i16) -> Vec<Vec2> {
         let half_width = self.size.x / 2.0;
         let half_height = self.size.y / 2.0;
         let (x, y) = (position.x, position.y);
@@ -43,7 +45,10 @@ impl Agent {
             ),
         ];
 
-        let transform = Affine2::from_translation(Vec2::new(x, y)) * Affine2::from_angle(rotation);
+        let increment_size = std::f32::consts::PI * 2.0 / self.max_increments as f32;
+        let rotation = rotation as f32 * increment_size;
+        let transform = Affine2::from_translation(Vec2::new(x as f32, y as f32))
+            * Affine2::from_angle(rotation);
         let corners_transformed: Vec<Vec2> = corners
             .iter()
             .map(|corner| transform.transform_point2(*corner))
@@ -80,14 +85,19 @@ impl Agent {
     }
 
     pub fn draw(&mut self, draw: &mut Draw, color: Color, cell_size: f32) {
-        let (x_grid, y_grid) = (self.position.x * cell_size, self.position.y * cell_size);
+        let (x_grid, y_grid) = (
+            self.position.x as f32 * cell_size,
+            self.position.y as f32 * cell_size,
+        );
         let (width_grid, height_grid) = (self.size.x * cell_size, self.size.y * cell_size);
 
         let half_width = width_grid / 2.0;
         let half_height = height_grid / 2.0;
 
+        let increment_size = std::f32::consts::PI * 2.0 / self.max_increments as f32;
+        let rotation = self.rotation as f32 * increment_size;
         let transform = Affine2::from_translation(Vec2::new(x_grid, y_grid))
-            * Affine2::from_angle(self.rotation)
+            * Affine2::from_angle(rotation)
             * Affine2::from_translation(-Vec2::new(half_width, half_height));
         draw.rect((0.0, 0.0), (width_grid, height_grid))
             .color(color)

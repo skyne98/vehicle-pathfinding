@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use agent::Agent;
 use notan::draw::*;
-use notan::math::Vec2;
+use notan::math::{IVec2, Vec2};
 use notan::prelude::*;
 use pathfinding::directed::astar::astar;
 
@@ -15,7 +15,7 @@ struct State {
     grid: Grid,
     agent: Agent,
     mouse_pos: (f32, f32),
-    path: Option<Vec<Action>>,
+    path: Option<Vec<Cell>>,
 }
 
 struct Grid {
@@ -58,112 +58,105 @@ impl Grid {
 }
 
 #[derive(Clone, Debug)]
-struct Action {
-    movement: f32,
-    rotation: f32,
-
-    start: Vec2,
-    start_rotation: f32,
+struct Cell {
+    rotation: i16,
+    position: IVec2,
 }
-impl Action {
-    pub fn new(movement: f32, rotation: f32, start: Vec2, start_rotation: f32) -> Self {
+impl Cell {
+    pub fn new(rotation: i16, start: IVec2) -> Self {
         Self {
-            movement,
             rotation,
-            start,
-            start_rotation,
+            position: start,
         }
     }
-    pub fn end(&self) -> Vec2 {
-        self.start + Vec2::from_angle(self.start_rotation + self.rotation) * self.movement
+    pub fn neighbor(&self, rotation: i16, increment_size: f32) -> Self {
+        // Convert rotation increments into an angle in radians.
+        let angle = rotation as f32 * increment_size;
+
+        // Generate the rotation vector from the angle. Assuming Vec2::from_angle constructs
+        // a vector from an angle in radians and points in the direction of the angle.
+        let rotation_vector = Vec2::from_angle(angle);
+
+        // Since we want to move to a direct neighbor, ensure the vector is normalized
+        // and then rounded to get a unit vector pointing to the closest grid direction.
+        let direction_vector = Vec2::new(rotation_vector.x.round(), rotation_vector.y.round());
+
+        // Calculate the new position by adding the direction vector to the current position.
+        // This assumes `self.position` is represented in grid coordinates (e.g., IVec2).
+        let new_position = self.position + direction_vector.as_ivec2();
+
+        // Assert that the new position is different from the old position to ensure movement.
+        assert_ne!(
+            self.position, new_position,
+            "The position should change; direction_vector: {:?}, old_position: {:?}, new_position: {:?}",
+            direction_vector, self.position, new_position
+        );
+
+        // Return a new instance of the struct with the updated position.
+        Self::new(rotation, new_position)
     }
-    pub fn end_rotation(&self) -> f32 {
-        self.start_rotation + self.rotation
-    }
-    pub fn neighbors(
-        &self,
-        move_increments: f32,
-        move_limit: f32,
-        turn_increments: f32,
-        turn_limit: f32,
-    ) -> Vec<Self> {
+    pub fn neighbors(&self, arc: u16, max_increments: u16) -> Vec<Self> {
+        let arc = arc as i16;
         let mut neighbors = Vec::new();
-        let mut turn = 0.0;
-        let mut movement;
-        while turn <= turn_limit {
-            movement = 0.0;
-            while movement <= move_limit {
-                // positive
-                let turn_abs = turn.abs();
-                let turn_fraction = turn_abs / turn_limit;
-                let turn_fraction = turn_fraction * turn_fraction * turn_fraction;
-                let actual_movement = movement * (1.0 - turn_fraction);
-                neighbors.push(Self::new(
-                    actual_movement,
-                    turn,
-                    self.end(),
-                    self.end_rotation(),
-                ));
-                neighbors.push(Self::new(
-                    actual_movement,
-                    -turn,
-                    self.end(),
-                    self.end_rotation(),
-                ));
-                neighbors.push(Self::new(
-                    -actual_movement,
-                    turn,
-                    self.end(),
-                    self.end_rotation(),
-                ));
-                neighbors.push(Self::new(
-                    -actual_movement,
-                    -turn,
-                    self.end(),
-                    self.end_rotation(),
-                ));
-
-                movement += move_increments;
-            }
-            turn += turn_increments;
+        let increment_size = std::f32::consts::PI * 2.0 / max_increments as f32;
+        for i in -arc..=arc {
+            let new_rotation = self.rotation + i as i16;
+            let new_rotation = if new_rotation < 0 {
+                max_increments as i16 + new_rotation
+            } else if new_rotation >= max_increments as i16 {
+                new_rotation - max_increments as i16
+            } else {
+                new_rotation
+            };
+            let cell = self.neighbor(new_rotation, increment_size);
+            neighbors.push(cell);
         }
-
         neighbors
+    }
+    pub fn opposite_rotation(&self, max_increments: u16) -> u16 {
+        let current_rotation = self.rotation as i32;
+        let max_rotation = max_increments as i32;
+        let opposite_rotation = (current_rotation + max_rotation / 2) % max_rotation;
+        opposite_rotation as u16
     }
     pub fn cost(&self) -> u32 {
         1
     }
 
-    pub fn draw(&self, draw: &mut Draw, font: &Font, cell_size: f32) {
-        let color = if self.movement.signum() > 0.0 {
-            Color::BLUE
-        } else {
-            Color::RED
-        };
-        draw_arrow(draw, self.start * cell_size, self.end() * cell_size, color);
+    pub fn draw(&self, draw: &mut Draw, font: &Font, cell_size: f32, max_increments: u16) {
+        let color = Color::BLUE;
+        let half_cell = cell_size / 2.0;
+        let start = Vec2::new(self.position.x as f32, self.position.y as f32);
+        let end = start
+            + Vec2::from_angle(
+                self.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32,
+            );
+        draw_arrow(
+            draw,
+            start * cell_size + half_cell,
+            end * cell_size + half_cell,
+            color,
+        );
 
         // write the data
-        let text = format!("M: {:.2} R: {:.2}", self.movement, self.rotation);
-        let text_position = self.start + (self.end() - self.start) / 2.0 + Vec2::new(0.0, 0.5);
+        let text = format!("R: {}", self.rotation);
+        let text_position = self.position.as_vec2();
         draw.text(&font, &text)
             .translate(text_position.x * cell_size, text_position.y * cell_size)
             .size(15.0)
             .color(Color::WHITE);
     }
 }
-impl PartialEq for Action {
+impl PartialEq for Cell {
     fn eq(&self, other: &Self) -> bool {
-        let start_x = self.start.x as i32 == other.start.x as i32;
-        let start_y = self.start.y as i32 == other.start.y as i32;
-        let end_x = self.end().x as i32 == other.end().x as i32;
-        let end_y = self.end().y as i32 == other.end().y as i32;
-        start_x && start_y && end_x && end_y
+        self.position == other.position && self.rotation == other.rotation
     }
 }
-impl Eq for Action {}
-impl Hash for Action {
+impl Eq for Cell {}
+impl Hash for Cell {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        ((self.start.x) as u32, (self.start.y) as u32).hash(state);
+        self.position.hash(state);
+        self.rotation.hash(state);
     }
 }
 
@@ -187,52 +180,37 @@ fn setup(gfx: &mut Graphics) -> State {
     State {
         font,
         grid,
-        agent: Agent::new(Vec2::new(3.0, 3.0), Vec2::new(1.5, 0.75)),
+        agent: Agent::new(IVec2::new(3, 3), Vec2::new(1.5, 0.75), 0, 16),
         mouse_pos: (0.0, 0.0),
         path: None,
     }
 }
 
-fn pathfind(state: &mut State, to: Vec2) {
+fn pathfind(state: &mut State, to: IVec2) {
     let start = Instant::now();
-    let start_action = Action::new(0.0, 0.0, state.agent.position, state.agent.rotation);
+    let start_action = Cell::new(state.agent.rotation, state.agent.position);
 
     let result = astar(
         &start_action,
         |action| {
             let to_check = action
-                .neighbors(
-                    0.1,
-                    1.0,
-                    std::f32::consts::PI / 128.0,
-                    std::f32::consts::PI / 4.0,
-                )
+                .neighbors(1, 16)
                 .into_iter()
                 .map(|neigh| (neigh.clone(), neigh.cost()))
-                .collect::<Vec<(Action, u32)>>();
+                .collect::<Vec<(Cell, u32)>>();
             to_check
                 .into_iter()
                 .filter(|(action, _)| {
-                    // out of bounds
-                    let (x, y) = (action.end().x as i32, action.end().y as i32);
-                    if x < 0 || x >= state.grid.size.0 || y < 0 || y >= state.grid.size.1 {
-                        println!("Out of bounds: {:?}", action.end());
-                        return false;
-                    }
-                    // blocked
-                    state.grid.is_cell_blocked(x, y) == false
-                })
-                .filter(|(action, _)| {
-                    let footprint = state.agent.footprint(action.end(), action.end_rotation());
+                    let footprint = state.agent.footprint(action.position, action.rotation);
                     footprint
                         .iter()
                         .all(|cell| !state.grid.is_cell_blocked(cell.x as i32, cell.y as i32))
                 })
-                .collect::<Vec<(Action, u32)>>()
+                .collect::<Vec<(Cell, u32)>>()
         },
-        |action| ((to - action.end()).length() * 10.0) as u32,
+        |action| ((to - action.position).length_squared()) as u32,
         |action| {
-            let (x, y) = (action.end().x as i32, action.end().y as i32);
+            let (x, y) = (action.position.x as i32, action.position.y as i32);
             let (goal_x, goal_y) = (to.x as i32, to.y as i32);
             x == goal_x && y == goal_y
         },
@@ -256,14 +234,17 @@ fn update(app: &mut App, state: &mut State) {
         state.grid.toggle_cell(grid_x, grid_y);
     }
     if app.mouse.was_pressed(MouseButton::Middle) {
-        state.agent.position = Vec2::new(x / state.grid.cell_size, y / state.grid.cell_size);
+        state.agent.position = IVec2::new(
+            (x / state.grid.cell_size) as i32,
+            (y / state.grid.cell_size) as i32,
+        );
     }
     if app.mouse.was_pressed(MouseButton::Right) {
         let to = (
             (x / state.grid.cell_size) as i32,
             (y / state.grid.cell_size) as i32,
         );
-        pathfind(state, Vec2::new(to.0 as f32, to.1 as f32));
+        pathfind(state, IVec2::new(to.0, to.1));
     }
 }
 
@@ -355,7 +336,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     // Draw the path
     if let Some(path) = &state.path {
         for action in path {
-            action.draw(&mut draw, &state.font, state.grid.cell_size);
+            action.draw(&mut draw, &state.font, state.grid.cell_size, 16);
         }
     }
 
