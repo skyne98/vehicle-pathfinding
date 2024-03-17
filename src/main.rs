@@ -133,10 +133,20 @@ impl Cell {
             let expected_to_final_fraction =
                 expected_to_final_fraction * 100 / max_increments as u32;
 
-            rotation_difference_fraction + expected_to_final_fraction
+            let distance = self
+                .position
+                .as_vec2()
+                .distance_squared(from.position.as_vec2());
+            let distance = (distance * 100.0) as u32;
+
+            rotation_difference_fraction + expected_to_final_fraction + distance
         } else {
             0
         }
+    }
+    pub fn heuristic(&self, to: IVec2) -> u32 {
+        let distance = self.position.as_vec2().distance_squared(to.as_vec2());
+        (distance * 10.0) as u32
     }
 
     pub fn draw(&self, draw: &mut Draw, font: &Font, cell_size: f32, max_increments: u16) {
@@ -176,6 +186,9 @@ impl Hash for Cell {
     }
 }
 
+const ARC: u16 = 1;
+const MAX_INCREMENTS: u16 = 32;
+
 #[notan_main]
 fn main() -> Result<(), String> {
     let window_config = WindowConfig::new().set_vsync(true).set_size(1920, 1080);
@@ -196,14 +209,13 @@ fn setup(gfx: &mut Graphics) -> State {
     State {
         font,
         grid,
-        agent: Agent::new(IVec2::new(3, 3), Vec2::new(1.5, 0.75), 0, 16),
+        agent: Agent::new(IVec2::new(3, 3), Vec2::new(1.5, 0.75), 0, MAX_INCREMENTS),
         mouse_pos: (0.0, 0.0),
         path: None,
     }
 }
 
 fn pathfind(state: &mut State, to: IVec2) {
-    let max_increments = 16;
     let start = Instant::now();
     let start_action = Cell::new(state.agent.rotation, state.agent.position);
 
@@ -211,7 +223,7 @@ fn pathfind(state: &mut State, to: IVec2) {
         &start_action,
         |action| {
             let to_check = action
-                .neighbors(1, max_increments)
+                .neighbors(ARC, MAX_INCREMENTS)
                 .into_iter()
                 .map(|neigh| neigh.clone())
                 .collect::<Vec<Cell>>();
@@ -221,7 +233,7 @@ fn pathfind(state: &mut State, to: IVec2) {
                 .map(|neigh| {
                     (
                         neigh.clone(),
-                        neigh.cost(Some(action.clone()), max_increments),
+                        neigh.cost(Some(action.clone()), MAX_INCREMENTS),
                     )
                 })
                 .collect::<Vec<(Cell, u32)>>();
@@ -235,7 +247,7 @@ fn pathfind(state: &mut State, to: IVec2) {
                 })
                 .collect::<Vec<(Cell, u32)>>()
         },
-        |action| (action.position.as_vec2().distance_squared(to.as_vec2()) / 100.0) as u32,
+        |action| action.heuristic(to),
         |action| {
             let (x, y) = (action.position.x as i32, action.position.y as i32);
             let (goal_x, goal_y) = (to.x as i32, to.y as i32);
@@ -363,7 +375,7 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
     // Draw the path
     if let Some(path) = &state.path {
         for action in path {
-            action.draw(&mut draw, &state.font, state.grid.cell_size, 16);
+            action.draw(&mut draw, &state.font, state.grid.cell_size, MAX_INCREMENTS);
         }
     }
 
