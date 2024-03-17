@@ -1,3 +1,4 @@
+use std::cell;
 use std::hash::Hash;
 use std::time::Instant;
 
@@ -72,17 +73,16 @@ impl Cell {
     pub fn neighbor(&self, rotation: i16, increment_size: f32) -> Self {
         // Convert rotation increments into an angle in radians.
         let angle = rotation as f32 * increment_size;
-
-        // Generate the rotation vector from the angle. Assuming Vec2::from_angle constructs
-        // a vector from an angle in radians and points in the direction of the angle.
         let rotation_vector = Vec2::from_angle(angle);
 
-        // Since we want to move to a direct neighbor, ensure the vector is normalized
-        // and then rounded to get a unit vector pointing to the closest grid direction.
-        let direction_vector = Vec2::new(rotation_vector.x.round(), rotation_vector.y.round());
+        // Calculate the x and y components of the direction vector.
+        let x = rotation_vector.x.round() as i32;
+        let y = rotation_vector.y.round() as i32;
+
+        // Ensure that the direction vector is within the valid range.
+        let direction_vector = Vec2::new(x.clamp(-1, 1) as f32, y.clamp(-1, 1) as f32);
 
         // Calculate the new position by adding the direction vector to the current position.
-        // This assumes `self.position` is represented in grid coordinates (e.g., IVec2).
         let new_position = self.position + direction_vector.as_ivec2();
 
         // Assert that the new position is different from the old position to ensure movement.
@@ -119,8 +119,24 @@ impl Cell {
         let opposite_rotation = (current_rotation + max_rotation / 2) % max_rotation;
         opposite_rotation as u16
     }
-    pub fn cost(&self) -> u32 {
-        1
+    pub fn cost(&self, from: Option<Cell>, max_increments: u16) -> u32 {
+        if let Some(from) = from {
+            let direction = (self.position - from.position).as_vec2().normalize();
+            let angle = direction.y.atan2(direction.x);
+            let expected_rotation =
+                (angle / (2.0 * std::f32::consts::PI) * max_increments as f32).round() as i16;
+
+            let rotation_difference = (from.rotation - expected_rotation).abs() as u32;
+            let rotation_difference_fraction = rotation_difference * 100 / max_increments as u32;
+
+            let expected_to_final_fraction = (self.rotation - expected_rotation).abs() as u32;
+            let expected_to_final_fraction =
+                expected_to_final_fraction * 100 / max_increments as u32;
+
+            rotation_difference_fraction + expected_to_final_fraction
+        } else {
+            0
+        }
     }
 
     pub fn draw(&self, draw: &mut Draw, font: &Font, cell_size: f32, max_increments: u16) {
@@ -187,6 +203,7 @@ fn setup(gfx: &mut Graphics) -> State {
 }
 
 fn pathfind(state: &mut State, to: IVec2) {
+    let max_increments = 16;
     let start = Instant::now();
     let start_action = Cell::new(state.agent.rotation, state.agent.position);
 
@@ -194,9 +211,19 @@ fn pathfind(state: &mut State, to: IVec2) {
         &start_action,
         |action| {
             let to_check = action
-                .neighbors(1, 16)
+                .neighbors(1, max_increments)
                 .into_iter()
-                .map(|neigh| (neigh.clone(), neigh.cost()))
+                .map(|neigh| neigh.clone())
+                .collect::<Vec<Cell>>();
+            // with cost
+            let to_check = to_check
+                .into_iter()
+                .map(|neigh| {
+                    (
+                        neigh.clone(),
+                        neigh.cost(Some(action.clone()), max_increments),
+                    )
+                })
                 .collect::<Vec<(Cell, u32)>>();
             to_check
                 .into_iter()
@@ -208,7 +235,7 @@ fn pathfind(state: &mut State, to: IVec2) {
                 })
                 .collect::<Vec<(Cell, u32)>>()
         },
-        |action| ((to - action.position).length_squared()) as u32,
+        |action| (action.position.as_vec2().distance_squared(to.as_vec2()) / 100.0) as u32,
         |action| {
             let (x, y) = (action.position.x as i32, action.position.y as i32);
             let (goal_x, goal_y) = (to.x as i32, to.y as i32);

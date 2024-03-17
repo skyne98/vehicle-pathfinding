@@ -47,7 +47,7 @@ impl Agent {
 
         let increment_size = std::f32::consts::PI * 2.0 / self.max_increments as f32;
         let rotation = rotation as f32 * increment_size;
-        let transform = Affine2::from_translation(Vec2::new(x as f32, y as f32))
+        let transform = Affine2::from_translation(Vec2::new(x as f32 + 0.5, y as f32 + 0.5))
             * Affine2::from_angle(rotation);
         let corners_transformed: Vec<Vec2> = corners
             .iter()
@@ -86,8 +86,8 @@ impl Agent {
 
     pub fn draw(&mut self, draw: &mut Draw, color: Color, cell_size: f32) {
         let (x_grid, y_grid) = (
-            self.position.x as f32 * cell_size,
-            self.position.y as f32 * cell_size,
+            (self.position.x as f32 + 0.5) * cell_size,
+            (self.position.y as f32 + 0.5) * cell_size,
         );
         let (width_grid, height_grid) = (self.size.x * cell_size, self.size.y * cell_size);
 
