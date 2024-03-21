@@ -71,7 +71,7 @@ impl Agent {
             .map(|corner| corner.y)
             .fold(f32::NEG_INFINITY, |acc, y| y.max(acc));
 
-        let mut footprint = Vec::new();
+        let mut footprint = Vec::with_capacity(((max_x - min_x) * (max_y - min_y)) as usize);
         for x in (min_x as i32)..=(max_x as i32) {
             for y in (min_y as i32)..=(max_y as i32) {
                 footprint.push(Vec2::new(x as f32, y as f32));

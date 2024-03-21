@@ -90,19 +90,21 @@ fn setup(gfx: &mut Graphics) -> State {
 
 fn pathfind(state: &mut State, to: IVec2) {
     let start = Instant::now();
-    let start_action = Cell::new(state.agent.rotation, state.agent.position);
+    let start_action = Cell::new(state.agent.rotation, state.agent.position, false);
 
     let result = astar(
         &start_action,
         |action| {
-            let to_check = action
-                .neighbors(ARC, MAX_INCREMENTS)
-                .into_iter()
-                .map(|neigh| neigh.clone())
-                .collect::<Vec<Cell>>();
+            let to_check = action.neighbors(ARC, MAX_INCREMENTS);
             // with cost
             let to_check = to_check
                 .into_iter()
+                .filter(|neigh| {
+                    state
+                        .grid
+                        .is_cell_blocked(neigh.position.x as i32, neigh.position.y as i32)
+                        == false
+                })
                 .map(|neigh| {
                     (
                         neigh.clone(),
