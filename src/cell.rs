@@ -232,13 +232,13 @@ impl Cell {
             let angle2 = from.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32;
             let angle_diff = angle_difference(angle1, angle2).abs();
             let speed_loss = speed_loss_fraction(angle_diff);
-            let angle_cost = (speed_loss * 100.0) as u32;
+            let angle_cost = (speed_loss * 1000.0) as u32;
 
             let distance = self
                 .position
                 .as_vec2()
                 .distance_squared(from.position.as_vec2());
-            let distance_cost = (distance * 100.0) as u32;
+            let distance_cost = (distance * 1000.0) as u32;
 
             (angle_cost + distance_cost) * reverse_cost
         } else {
