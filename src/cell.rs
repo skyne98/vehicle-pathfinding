@@ -1,10 +1,129 @@
 use notan::draw::*;
 use notan::math::{IVec2, Vec2};
 use notan::prelude::*;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::Hash;
+use std::rc::Rc;
 
 use crate::draw_arrow;
 
+// ===============================
+// NEIGHBOR CACHE
+// ===============================
+pub type NeighborCacheRef = Rc<RefCell<NeighborCache>>;
+#[derive(Clone, Debug)]
+pub struct NeighborCache {
+    cache: Vec<Vec<(IVec2, i16, bool)>>,
+    neighbor_xy_to_increment: HashMap<IVec2, i16>,
+}
+
+impl NeighborCache {
+    pub fn new(max_increments: u16, arc: u16) -> Self {
+        NeighborCache {
+            cache: Vec::with_capacity(max_increments as usize),
+            neighbor_xy_to_increment: HashMap::new(),
+        }
+    }
+    pub fn new_precomputed(max_increments: u16, arc: u16) -> Self {
+        let mut cache = Self::new(max_increments, arc);
+        cache.precompute(max_increments, arc);
+        cache
+    }
+
+    pub fn get(&self, rotation: i16) -> Option<&Vec<(IVec2, i16, bool)>> {
+        self.cache.get(rotation as usize)
+    }
+
+    pub fn precompute(&mut self, max_increments: u16, arc: u16) {
+        // Precompute increments pointing in "cardinal" directions.
+        // Those are the increments that go most "straight" to that neighbor.
+        let increment_size = std::f32::consts::PI * 2.0 / max_increments as f32;
+        let cardinal_directions = vec![
+            IVec2::new(0, 1),
+            IVec2::new(1, 0),
+            IVec2::new(0, -1),
+            IVec2::new(-1, 0),
+            // diagonals
+            IVec2::new(1, 1),
+            IVec2::new(1, -1),
+            IVec2::new(-1, 1),
+            IVec2::new(-1, -1),
+        ];
+        // now use dot product to find the closest increment to each direction
+        for direction in cardinal_directions {
+            let mut closest_increment = 0;
+            let mut closest_dot = -1.0;
+            for increment in 0..max_increments {
+                let angle = increment as f32 * increment_size;
+                let rotation_vector = Vec2::from_angle(angle);
+                let direction_vector = Vec2::new(direction.x as f32, direction.y as f32);
+                let dot = rotation_vector.dot(direction_vector);
+                if dot > closest_dot {
+                    closest_dot = dot;
+                    closest_increment = increment;
+                }
+            }
+            self.neighbor_xy_to_increment
+                .insert(direction, closest_increment as i16);
+        }
+        // now print them pretty
+        for (direction, increment) in self.neighbor_xy_to_increment.iter() {
+            println!("Direction: {:?} -> Increment: {}", direction, increment);
+        }
+
+        // Precompute the neighbors for each rotation.
+        for rotation in 0..max_increments as i16 {
+            let arc = arc as i16;
+            let mut neighbors = Vec::with_capacity((arc * 2 + 1) as usize);
+
+            for i in -arc..=arc {
+                let new_rotation = Cell::clamp_rotation(rotation + i, max_increments as i16);
+                let cell = Cell::precompute_neighbor(new_rotation, increment_size, false);
+                neighbors.push((cell.position, cell.rotation, cell.reverse));
+            }
+
+            let reverse_arc = arc * 2;
+            for i in -reverse_arc..=reverse_arc {
+                let new_rotation = Cell::clamp_rotation(rotation + i, max_increments as i16);
+                let cell = Cell::precompute_neighbor(new_rotation, increment_size, true);
+                neighbors.push((cell.position, cell.rotation, cell.reverse));
+            }
+
+            // filter out the neighbors which don't follow one of the
+            // following rules:
+            // 1. rotation changed, there was turning
+            // 2. rotation didn't change, but going in a "cardinal" direction
+            // 3. going in reverse
+            neighbors = neighbors
+                .into_iter()
+                .filter(|(pos, rot, rev)| {
+                    let rotation_changed = *rot != rotation;
+                    let cardinal = self
+                        .neighbor_xy_to_increment
+                        .values()
+                        .any(|&inc| inc == *rot);
+                    rotation_changed || cardinal || *rev
+                })
+                .collect();
+
+            self.cache.push(neighbors);
+        }
+    }
+}
+
+// ===============================
+// COST CACHE
+// ===============================
+pub type CostCacheRef = Rc<RefCell<CostCache>>;
+#[derive(Clone, Debug)]
+pub struct CostCache {
+    cache: Vec<Vec<u32>>,
+}
+
+// ===============================
+// CELL
+// ===============================
 #[derive(Clone, Debug)]
 pub struct Cell {
     pub rotation: i16,
@@ -19,8 +138,7 @@ impl Cell {
             reverse,
         }
     }
-    pub fn neighbor(&self, rotation: i16, increment_size: f32, reverse: bool) -> Self {
-        // Convert rotation increments into an angle in radians.
+    pub fn precompute_neighbor(rotation: i16, increment_size: f32, reverse: bool) -> Self {
         let angle = rotation as f32 * increment_size;
         let angle = if reverse {
             angle + std::f32::consts::PI
@@ -28,47 +146,32 @@ impl Cell {
             angle
         };
         let rotation_vector = Vec2::from_angle(angle);
-
-        // Calculate the x and y components of the direction vector.
         let x = rotation_vector.x.round() as i32;
         let y = rotation_vector.y.round() as i32;
-
-        // Ensure that the direction vector is within the valid range.
         let direction_vector = Vec2::new(x.clamp(-1, 1) as f32, y.clamp(-1, 1) as f32);
+        let new_position = IVec2::new(direction_vector.x as i32, direction_vector.y as i32);
 
-        // Calculate the new position by adding the direction vector to the current position.
-        let new_position = self.position + direction_vector.as_ivec2();
-
-        // Assert that the new position is different from the old position to ensure movement.
-        assert_ne!(
-            self.position, new_position,
-            "The position should change; direction_vector: {:?}, old_position: {:?}, new_position: {:?}",
-            direction_vector, self.position, new_position
-        );
-
-        // Return a new instance of the struct with the updated position.
-        Self::new(rotation, new_position, reverse)
+        Self {
+            position: new_position,
+            rotation,
+            reverse,
+        }
     }
-    pub fn neighbors(&self, arc: u16, max_increments: u16) -> Vec<Self> {
-        let arc = arc as i16;
-        let mut neighbors = Vec::with_capacity((arc * 2 + 1) as usize);
-        let increment_size = std::f32::consts::PI * 2.0 / max_increments as f32;
-        for i in -arc..=arc {
-            let new_rotation = self.rotation + i as i16;
-            let new_rotation = Self::clamp_rotation(new_rotation, max_increments as i16);
-            let cell = self.neighbor(new_rotation, increment_size, false);
-            neighbors.push(cell);
+    pub fn neighbors(&self, cache: &NeighborCacheRef, arc: u16, max_increments: u16) -> Vec<Self> {
+        let mut neighbors = Vec::new();
+        if let Some(cached) = cache.borrow().get(self.rotation) {
+            neighbors = Vec::with_capacity(cached.len());
+            for (position, rotation, reverse) in cached {
+                let new_position = self.position + *position;
+                let new_rotation = *rotation;
+                let new_reverse = *reverse;
+                neighbors.push(Self {
+                    position: new_position,
+                    rotation: new_rotation,
+                    reverse: new_reverse,
+                });
+            }
         }
-
-        // now reverse, which has 2x the arc and 2x the cost
-        let reverse_arc = arc * 2;
-        for i in -reverse_arc..=reverse_arc {
-            let new_rotation = self.rotation + i as i16;
-            let new_rotation = Self::clamp_rotation(new_rotation, max_increments as i16);
-            let cell = self.neighbor(new_rotation, increment_size, true);
-            neighbors.push(cell);
-        }
-
         neighbors
     }
     pub fn opposite_rotation(&self, rotation: i16, max_increments: i16) -> i16 {
@@ -87,33 +190,62 @@ impl Cell {
             rotation
         }
     }
-    pub fn cost(&self, from: Option<Cell>, max_increments: u16) -> u32 {
-        let reverse_cost = if self.reverse { 4 } else { 1 };
+    pub fn cost(&self, from: Option<Cell>, arc: u16, max_increments: u16) -> u32 {
+        fn angle_difference(angle1: f32, angle2: f32) -> f32 {
+            let pi = std::f32::consts::PI;
+            let two_pi = 2.0 * pi;
+            let mut diff = (angle2 - angle1) % two_pi;
+
+            if diff > pi {
+                diff -= two_pi;
+            } else if diff < -pi {
+                diff += two_pi;
+            }
+
+            diff
+        }
+        let speed_loss_fraction = |turn_angle_rad: f32| -> f32 {
+            let initial_speed = 40.0 * 0.27778; // 40 km/h in m/s
+            let friction_coefficient = 0.75;
+            let g = 9.81;
+
+            // Calculate the maximum safe speed
+            let max_safe_speed = (friction_coefficient * g * (1.0 / turn_angle_rad)).sqrt();
+
+            // If max_safe_speed is greater than initial_speed, cap it at initial_speed
+            let capped_max_safe_speed = if max_safe_speed > initial_speed {
+                initial_speed
+            } else {
+                max_safe_speed
+            };
+
+            // Calculate the speed loss fraction
+            let speed_loss = (initial_speed - capped_max_safe_speed) / initial_speed;
+
+            // Ensure the fraction is between 0 and 1
+            speed_loss.max(0.0).min(1.0)
+        };
+
+        let reverse_cost = if self.reverse { 10 } else { 1 };
         if let Some(from) = from {
-            let direction = (self.position - from.position).as_vec2().normalize();
-            let angle = direction.y.atan2(direction.x);
-            let expected_rotation =
-                (angle / (2.0 * std::f32::consts::PI) * max_increments as f32).round() as i16;
-
-            let rotation_difference = (from.rotation - expected_rotation).abs() as u32;
-            let rotation_difference_fraction = rotation_difference * 100 / max_increments as u32;
-
-            let expected_to_final_fraction = (self.rotation - expected_rotation).abs() as u32;
-            let expected_to_final_fraction =
-                expected_to_final_fraction * 100 / max_increments as u32;
+            let angle1 = self.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32;
+            let angle2 = from.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32;
+            let angle_diff = angle_difference(angle1, angle2).abs();
+            let speed_loss = speed_loss_fraction(angle_diff);
+            let angle_cost = (speed_loss * 100.0) as u32;
 
             let distance = self
                 .position
                 .as_vec2()
                 .distance_squared(from.position.as_vec2());
-            let distance = (distance * 100.0) as u32;
+            let distance_cost = (distance * 100.0) as u32;
 
-            (rotation_difference_fraction + expected_to_final_fraction + distance) * reverse_cost
+            (angle_cost + distance_cost) * reverse_cost
         } else {
             0
         }
     }
-    pub fn heuristic(&self, to: IVec2) -> u32 {
+    pub fn heuristic(&self, to: IVec2, max_increments: u16) -> u32 {
         let distance = self.position.as_vec2().distance_squared(to.as_vec2());
         (distance * 10.0) as u32
     }
