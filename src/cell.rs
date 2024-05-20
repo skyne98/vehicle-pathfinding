@@ -190,49 +190,28 @@ impl Cell {
             rotation
         }
     }
-    pub fn cost(&self, from: Option<Cell>, arc: u16, max_increments: u16) -> u32 {
-        fn angle_difference(angle1: f32, angle2: f32) -> f32 {
-            let pi = std::f32::consts::PI;
-            let two_pi = 2.0 * pi;
-            let mut diff = (angle2 - angle1) % two_pi;
+    pub fn rotation_to(&self, to: i16, max_increments: i16) -> i16 {
+        let angle1 = self.rotation as i16;
+        let angle2 = to as i16;
+        // Calculate the clockwise difference
+        let diff_clockwise = (angle2 - angle1 + max_increments) % max_increments;
 
-            if diff > pi {
-                diff -= two_pi;
-            } else if diff < -pi {
-                diff += two_pi;
-            }
+        // Calculate the counterclockwise difference
+        let diff_counterclockwise = (angle1 - angle2 + max_increments) % max_increments;
 
-            diff
+        // Return the smaller difference
+        if diff_clockwise < diff_counterclockwise {
+            diff_clockwise
+        } else {
+            diff_counterclockwise
         }
-        let speed_loss_fraction = |turn_angle_rad: f32| -> f32 {
-            let initial_speed = 40.0 * 0.27778; // 40 km/h in m/s
-            let friction_coefficient = 0.75;
-            let g = 9.81;
-
-            // Calculate the maximum safe speed
-            let max_safe_speed = (friction_coefficient * g * (1.0 / turn_angle_rad)).sqrt();
-
-            // If max_safe_speed is greater than initial_speed, cap it at initial_speed
-            let capped_max_safe_speed = if max_safe_speed > initial_speed {
-                initial_speed
-            } else {
-                max_safe_speed
-            };
-
-            // Calculate the speed loss fraction
-            let speed_loss = (initial_speed - capped_max_safe_speed) / initial_speed;
-
-            // Ensure the fraction is between 0 and 1
-            speed_loss.max(0.0).min(1.0)
-        };
-
+    }
+    pub fn cost(&self, from: Option<Cell>, arc: u16, max_increments: u16) -> u32 {
         let reverse_cost = if self.reverse { 10 } else { 1 };
         if let Some(from) = from {
-            let angle1 = self.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32;
-            let angle2 = from.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32;
-            let angle_diff = angle_difference(angle1, angle2).abs();
-            let speed_loss = speed_loss_fraction(angle_diff);
-            let angle_cost = (speed_loss * 1000.0) as u32;
+            let rotation = self.rotation_to(from.rotation, max_increments as i16);
+            let arc_fraction = rotation as f32 / arc as f32;
+            let angle_cost = (arc_fraction * 1000.0) as u32;
 
             let distance = self
                 .position
