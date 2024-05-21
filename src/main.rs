@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use agent::Agent;
 use bitarray::BitArray;
+use geo::{Simplify, SimplifyIdx};
 use notan::app::crevice::std140::WriteStd140;
 use notan::draw::*;
 use notan::math::{IVec2, Vec2};
@@ -15,6 +16,11 @@ pub mod bitarray;
 pub mod cell;
 
 use cell::Cell;
+
+use mimalloc::MiMalloc;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(AppState)]
 struct State {
@@ -34,6 +40,7 @@ struct Grid {
 impl Grid {
     fn new(cell_size: f32, width: i32, height: i32) -> Self {
         let size = (width / cell_size as i32, height / cell_size as i32);
+        println!("Grid size: {:?}", size);
         let cells = BitArray::new((size.0 * size.1) as usize);
         Self {
             cell_size,
@@ -68,10 +75,11 @@ impl Grid {
 
 const ARC: u16 = 1;
 const MAX_INCREMENTS: u16 = 32;
+const CELL_SIZE: f32 = 4.0;
 
 #[notan_main]
 fn main() -> Result<(), String> {
-    let window_config = WindowConfig::new().set_vsync(true).set_size(1920, 1080);
+    let window_config = WindowConfig::new().set_vsync(true).set_size(1400, 1400);
     notan::init_with(setup)
         .add_config(DrawConfig)
         .add_config(window_config)
@@ -84,12 +92,12 @@ fn setup(gfx: &mut Graphics) -> State {
     let font = gfx
         .create_font(include_bytes!("assets/quicksand.ttf"))
         .expect("Error loading font");
-    let cell_size = 60.0;
-    let grid = Grid::new(cell_size, 1920, 1080);
+    let cell_size = CELL_SIZE;
+    let grid = Grid::new(cell_size, 1400, 1400);
     State {
         font: Some(font),
         grid,
-        agent: Agent::new(IVec2::new(3, 3), Vec2::new(1.5, 0.75), 0, MAX_INCREMENTS),
+        agent: Agent::new(IVec2::new(3, 3), Vec2::new(2.35, 1.75), 0, MAX_INCREMENTS),
         mouse_pos: (0.0, 0.0),
         path: None,
         neighbor_cache: Rc::new(RefCell::new(cell::NeighborCache::new_precomputed(
@@ -216,6 +224,75 @@ fn draw_arrow(draw: &mut Draw, from: Vec2, to: Vec2, color: Color) {
     draw.line((arrow_end.x, arrow_end.y), (arrow_end2.x, arrow_end2.y))
         .color(color);
 }
+fn draw_path_spline(draw: &mut Draw, path: &[Cell], color: Color, cell_size: f32) {
+    use geo::{Coord, LineString};
+    use splines::{Interpolation, Key, Spline};
+
+    let line_string = LineString::new(
+        path.iter()
+            .map(|cell| Coord {
+                x: cell.position.x as f64,
+                y: cell.position.y as f64,
+            })
+            .collect(),
+    );
+    let simplified_path = line_string.simplify_idx(&0.5);
+    // add back direction nodes, where reverse
+    // switches to the opposite direction and back
+    let mut reverse_keys = Vec::new();
+    let simplified_path = path
+        .iter()
+        .enumerate()
+        .filter(|(i, cell)| {
+            let (i, cell) = (*i, *cell);
+            if i == 0 || i == path.len() - 1 {
+                return true;
+            }
+
+            let next = &path[i + 1];
+            if next.reverse != cell.reverse {
+                reverse_keys.push(i);
+                return true;
+            }
+
+            simplified_path.contains(&i)
+        })
+        .map(|(i, _)| i)
+        .collect::<Vec<_>>();
+
+    let mut keys = Vec::with_capacity(path.len());
+    for (i, cell_i) in simplified_path.iter().enumerate() {
+        let cell = &path[*cell_i];
+        let x = (cell.position.x as f32 + 0.5) * cell_size;
+        let y = (cell.position.y as f32 + 0.5) * cell_size;
+        let xy = Vec2::new(x, y);
+
+        let angle = (cell.rotation as f32 / MAX_INCREMENTS as f32) * std::f32::consts::PI * 2.0;
+        let angle_vector = Vec2::from_angle(angle);
+        let tangent = xy + angle_vector * cell_size;
+        let reverse = reverse_keys.contains(cell_i);
+        let interpolation = if reverse {
+            Interpolation::Linear
+        } else {
+            Interpolation::Bezier(tangent)
+        };
+        keys.push(Key::new(i as f32, xy, interpolation));
+    }
+
+    let spline = Spline::from_vec(keys);
+    // now sample and draw the spline at a higher resolution
+    let mut last = None;
+    for i in 0..path.len() * 10 {
+        let t = i as f32 / 10.0;
+        let point = spline
+            .clamped_sample(t)
+            .expect(format!("Failed to sample x at {} (len: {})", t, spline.len()).as_str());
+        if let Some((last_x, last_y)) = last {
+            draw.line((last_x, last_y), (point.x, point.y)).color(color);
+        }
+        last = Some((point.x, point.y));
+    }
+}
 
 fn draw(gfx: &mut Graphics, state: &mut State) {
     let mut draw = gfx.create_draw();
@@ -273,6 +350,10 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
                 MAX_INCREMENTS,
             );
         }
+    }
+    // Draw the path as a spline
+    if let Some(path) = &state.path {
+        draw_path_spline(&mut draw, path, Color::GREEN, state.grid.cell_size);
     }
 
     // Draw the selection
