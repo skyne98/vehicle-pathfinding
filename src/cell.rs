@@ -3,6 +3,7 @@ use notan::math::{IVec2, Vec2};
 use notan::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::f32::consts::PI;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -213,12 +214,19 @@ impl Cell {
             diff_counterclockwise
         }
     }
+    pub fn is_reverse_to(&self, other: &Self, max_increments: i16) -> bool {
+        let from_other_to_self = self.position.as_vec2() - other.position.as_vec2();
+        let increment_size = 2.0 * PI / max_increments as f32;
+        let angle = other.rotation as f32 * increment_size;
+        let rotation_vector = Vec2::from_angle(angle);
+        let dot = rotation_vector.dot(from_other_to_self.normalize());
+        dot < 0.0
+    }
     pub fn cost(&self, from: Option<Cell>, arc: u16, max_increments: u16) -> u32 {
         if let Some(from) = from {
             let rotation = self.rotation_to(from.rotation, max_increments as i16);
-            let reverse = rotation > max_increments as i16 / 4;
-
-            let reverse_cost = if reverse { 100 } else { 1 };
+            let reverse = self.is_reverse_to(&from, max_increments as i16);
+            let reverse_cost = if reverse { 10 } else { 1 };
 
             let arc_fraction = rotation as f32 / arc as f32;
             let angle_cost = (arc_fraction * 1000.0) as u32;
@@ -239,14 +247,21 @@ impl Cell {
         (distance * 10.0) as u32
     }
 
-    pub fn draw(&self, draw: &mut Draw, font: &Font, cell_size: f32, max_increments: u16) {
+    pub fn draw(
+        &self,
+        from: Option<&Cell>,
+        draw: &mut Draw,
+        font: &Font,
+        cell_size: f32,
+        max_increments: u16,
+    ) {
         // Define the color based on the reverse flag
-        // let color = if self.reverse {
-        //     Color::RED
-        // } else {
-        //     Color::BLUE
-        // };
-        let color = Color::BLUE;
+        let reverse = if let Some(from) = from {
+            self.is_reverse_to(&from, max_increments as i16)
+        } else {
+            false
+        };
+        let color = if reverse { Color::RED } else { Color::BLUE };
 
         // Calculate the center of the current cell as the starting point
         let center = Vec2::new(

@@ -295,8 +295,7 @@ fn draw_path_spline(draw: &mut Draw, path: &[Cell], color: Color, cell_size: f32
             }
 
             let next = &path[i + 1];
-            let reverse =
-                cell.rotation_to(next.rotation, MAX_INCREMENTS as i16) > MAX_INCREMENTS as i16 / 4;
+            let reverse = next.is_reverse_to(cell, MAX_INCREMENTS as i16);
             if reverse {
                 reverse_keys.push(i);
                 return true;
@@ -389,13 +388,16 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
 
     // Draw the path
     if let Some(path) = &state.path {
+        let mut last = None;
         for action in path {
             action.draw(
+                last,
                 &mut draw,
                 &state.font.unwrap(),
                 state.grid.cell_size,
                 MAX_INCREMENTS,
             );
+            last = Some(action);
         }
     }
     // Draw the path as a spline
