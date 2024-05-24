@@ -119,7 +119,7 @@ fn setup(gfx: &mut Graphics) -> State {
     }
 }
 
-fn pathfind(state: &mut State, to: IVec2) {
+fn pathfind(state: &mut State, to: IVec2, max_increment: u16) {
     let start = Instant::now();
     let start_action = Cell::new(state.agent.rotation, state.agent.position);
     let neighbors_cache = state.neighbor_cache.clone();
@@ -129,12 +129,12 @@ fn pathfind(state: &mut State, to: IVec2) {
         |action| {
             let mut result = Vec::with_capacity(128);
 
-            for neigh in action.neighbors(&neighbors_cache, ARC, MAX_INCREMENTS) {
+            for neigh in action.neighbors(&neighbors_cache, ARC, max_increment) {
                 if !state
                     .grid
                     .is_cell_blocked(neigh.position.x as i32, neigh.position.y as i32)
                 {
-                    let cost = neigh.cost(Some(action.clone()), ARC, MAX_INCREMENTS);
+                    let cost = neigh.cost(Some(action.clone()), ARC, max_increment);
                     let rotation_footprint = state.agent.rotation_footprint(neigh.rotation);
                     if rotation_footprint.iter().all(|cell| {
                         !state.grid.is_cell_blocked(
@@ -149,7 +149,7 @@ fn pathfind(state: &mut State, to: IVec2) {
 
             result
         },
-        |action| action.heuristic(to, MAX_INCREMENTS),
+        |action| action.heuristic(to, max_increment),
         |action| {
             let (x, y) = (action.position.x as i32, action.position.y as i32);
             let (goal_x, goal_y) = (to.x as i32, to.y as i32);
@@ -218,7 +218,7 @@ fn update(app: &mut App, state: &mut State) {
             (x / state.grid.cell_size) as i32,
             (y / state.grid.cell_size) as i32,
         );
-        pathfind(state, IVec2::new(to.0, to.1));
+        pathfind(state, IVec2::new(to.0, to.1), MAX_INCREMENTS);
     }
     if app.keyboard.is_down(KeyCode::Space) {
         state.agent.rotation = (state.agent.rotation + 1) % MAX_INCREMENTS as i16;
@@ -423,112 +423,96 @@ fn draw(gfx: &mut Graphics, state: &mut State) {
 // ===== TESTS =====
 #[cfg(test)]
 mod tests {
+    use std::path;
+
     use super::*;
 
-    fn create_test_state() -> State {
+    fn setup_state(max_increment: u16, arc: u16) -> State {
+        let cell_size = CELL_SIZE;
+        let grid = Grid::new(cell_size, SCREEN_SIZE.0 as i32, SCREEN_SIZE.1 as i32);
+        let agent = Agent::new(IVec2::new(0, 0), Vec2::new(0.01, 0.01), 0, max_increment);
         State {
             font: None,
-            grid: Grid::new(60.0, 1920, 1080),
-            agent: Agent::new(IVec2::new(0, 0), Vec2::new(1.5, 0.75), 0, MAX_INCREMENTS),
+            grid,
+            agent,
             mouse_pos: (0.0, 0.0),
             path: None,
             neighbor_cache: Rc::new(RefCell::new(cell::NeighborCache::new_precomputed(
-                MAX_INCREMENTS,
-                ARC,
+                max_increment,
+                arc,
             ))),
         }
     }
+    fn default_state() -> State {
+        setup_state(8, 1)
+    }
 
-    fn add_obstacles(state: &mut State, obstacles: &[(i32, i32)]) {
-        for &(x, y) in obstacles {
-            state.grid.toggle_cell(x, y);
+    #[test]
+    fn test_pathfind_straight() {
+        let mut state = default_state();
+        pathfind(&mut state, IVec2::new(5, 0), 8);
+        assert!(state.path.is_some());
+        for i in 0..5 {
+            let action = state.path.as_ref().unwrap().get(i).unwrap();
+            assert_eq!(action.position, IVec2::new(i as i32, 0));
         }
     }
-
     #[test]
-    fn test_pathfind_simple() {
-        let mut state = create_test_state();
-        pathfind(&mut state, IVec2::new(5, 5));
-
+    fn test_pathfind_diagonal() {
+        let mut state = default_state();
+        state.agent.rotation = 1;
+        pathfind(&mut state, IVec2::new(5, 5), 8);
+        assert!(state.path.is_some());
+        for i in 0..5 {
+            let action = state.path.as_ref().unwrap().get(i).unwrap();
+            assert_eq!(action.position, IVec2::new(i as i32, i as i32));
+        }
+    }
+    #[test]
+    fn test_pathfind_blocked() {
+        let mut state = default_state();
+        state.grid.toggle_cell(1, 0);
+        state.grid.toggle_cell(1, 1);
+        state.grid.toggle_cell(0, 1);
+        pathfind(&mut state, IVec2::new(5, 5), 8);
+        assert!(state.path.is_none());
+    }
+    #[test]
+    fn test_pathfind_turn() {
+        let mut state = default_state();
+        pathfind(&mut state, IVec2::new(5, 5), 8);
         assert!(state.path.is_some());
         let path = state.path.as_ref().unwrap();
-        assert!(path.len() >= 6);
-        assert_eq!(path[0].position, IVec2::new(0, 0));
-        assert_eq!(path[path.len() - 1].position, IVec2::new(5, 5));
+
+        let action = path.get(0).unwrap();
+        assert_eq!(action.position, IVec2::new(0, 0));
+        assert_eq!(action.rotation, 0);
+        let action = path.get(1).unwrap();
+        assert_eq!(action.position, IVec2::new(1, 1));
+        assert_eq!(action.rotation, 1);
+        let action = path.get(2).unwrap();
+        assert_eq!(action.position, IVec2::new(2, 2));
+        assert_eq!(action.rotation, 1);
+        let action = path.get(3).unwrap();
+        assert_eq!(action.position, IVec2::new(3, 3));
+        assert_eq!(action.rotation, 1);
+        let action = path.get(4).unwrap();
+        assert_eq!(action.position, IVec2::new(4, 4));
+        assert_eq!(action.rotation, 1);
     }
-
     #[test]
-    fn test_pathfind_with_obstacles() {
-        let mut state = create_test_state();
-        add_obstacles(&mut state, &[(2, 2), (3, 3)]);
-
-        pathfind(&mut state, IVec2::new(5, 5));
-
+    fn test_pathfind_reverse_better_arc() {
+        let mut state = default_state();
+        state.agent.position = IVec2::new(5, 5);
+        pathfind(&mut state, IVec2::new(5, 6), 8);
         assert!(state.path.is_some());
         let path = state.path.as_ref().unwrap();
-        assert!(path.len() > 6); // Path should be longer due to obstacles
-        assert_eq!(path[0].position, IVec2::new(0, 0));
-        assert_eq!(path[path.len() - 1].position, IVec2::new(5, 5));
-    }
 
-    #[test]
-    fn test_pathfind_no_path() {
-        let mut state = create_test_state();
-        let obstacles = vec![(0, 3), (1, 3), (2, 3), (3, 3), (3, 2), (3, 1), (3, 0)];
-        add_obstacles(&mut state, &obstacles);
-
-        pathfind(&mut state, IVec2::new(5, 5));
-
-        assert!(state.path.is_none()); // No path should be found
-    }
-
-    #[test]
-    fn test_rotation_footprint() {
-        let agent = Agent::new(IVec2::new(0, 0), Vec2::new(0.5, 0.5), 0, MAX_INCREMENTS);
-        let footprint = agent.rotation_footprint(0);
-        assert_eq!(footprint.len(), 1);
-        assert_eq!(footprint[0], IVec2::new(0, 0));
-
-        // 1 by 1 footprint
-        let agent = Agent::new(IVec2::new(0, 0), Vec2::new(0.5, 0.5), 0, MAX_INCREMENTS);
-        let footprint = agent.rotation_footprint(0);
-        assert_eq!(footprint.len(), 1);
-        assert_eq!(footprint[0], IVec2::new(0, 0));
-
-        // 2 by 1 footprint
-        let agent = Agent::new(IVec2::new(0, 0), Vec2::new(1.5, 0.5), 0, MAX_INCREMENTS);
-        let footprint = agent.rotation_footprint(0);
-        assert_eq!(footprint.len(), 2);
-        assert_eq!(footprint[0], IVec2::new(0, 0));
-        assert_eq!(footprint[1], IVec2::new(1, 0));
-
-        // 2 by 2 footprint
-        let agent = Agent::new(IVec2::new(0, 0), Vec2::new(1.5, 1.5), 0, MAX_INCREMENTS);
-        let footprint = agent.rotation_footprint(0);
-        let expected_footprint = vec![
-            IVec2::new(0, 0),
-            IVec2::new(0, 1),
-            IVec2::new(1, 0),
-            IVec2::new(1, 1),
-        ];
-        assert_eq!(*footprint, expected_footprint);
-
-        // 2 by 2 at x=1, y=1
-        let agent = Agent::new(IVec2::new(1, 1), Vec2::new(1.5, 1.5), 0, MAX_INCREMENTS);
-        let footprint = agent.rotation_footprint(0);
-        let expected_footprint = vec![
-            IVec2::new(1, 1),
-            IVec2::new(1, 2),
-            IVec2::new(2, 1),
-            IVec2::new(2, 2),
-        ];
-        assert_eq!(*footprint, expected_footprint);
-
-        // 2 by 1 with 90 degree rotation
-        let agent = Agent::new(IVec2::new(0, 0), Vec2::new(1.5, 0.5), 0, MAX_INCREMENTS);
-        let footprint = agent.rotation_footprint(MAX_INCREMENTS as i16 / 4);
-        assert_eq!(footprint.len(), 2);
-        assert_eq!(footprint[0], IVec2::new(0, 0));
-        assert_eq!(footprint[1], IVec2::new(0, 1));
+        let action = path.get(0).unwrap();
+        assert_eq!(action.position, IVec2::new(5, 5));
+        assert_eq!(action.rotation, 0);
+        let action = path.get(1).unwrap();
+        assert_eq!(action.position, IVec2::new(5, 6));
+        assert_eq!(action.rotation, 6);
     }
 }

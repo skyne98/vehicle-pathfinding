@@ -88,13 +88,11 @@ impl NeighborCache {
             let reverse_arc = arc * 2;
             let opposite_rotation =
                 Cell::clamp_rotation(rotation + max_increments as i16 / 2, max_increments as i16);
-            println!("Rotation: {} -> Opposite: {}", rotation, opposite_rotation);
             for i in -reverse_arc..=reverse_arc {
                 let new_rotation =
                     Cell::clamp_rotation(opposite_rotation + i, max_increments as i16);
                 let cell =
                     Cell::precompute_neighbor(new_rotation, increment_size, true, max_increments);
-                println!("Opposite Rotation: {} -> Cell: {:#?}", new_rotation, cell);
                 neighbors.push((cell.position, cell.rotation));
             }
 
@@ -304,5 +302,65 @@ impl Hash for Cell {
         self.position.hash(state);
         self.rotation.hash(state);
         // self.reverse.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_opposite() {
+        let max_increments = 8;
+        let center = Cell::new(0, IVec2::new(0, 0));
+        let left = Cell::new(0, IVec2::new(-1, 0));
+        let right = Cell::new(0, IVec2::new(1, 0));
+        let up = Cell::new(0, IVec2::new(0, 1));
+        let down = Cell::new(0, IVec2::new(0, -1));
+        let up_left = Cell::new(0, IVec2::new(-1, 1));
+        let up_right = Cell::new(0, IVec2::new(1, 1));
+        let down_left = Cell::new(0, IVec2::new(-1, -1));
+        let down_right = Cell::new(0, IVec2::new(1, -1));
+
+        assert_eq!(
+            left.is_reverse_to(&center, max_increments as i16),
+            true,
+            "Left"
+        );
+        assert_eq!(
+            right.is_reverse_to(&center, max_increments as i16),
+            false,
+            "Right"
+        );
+        assert_eq!(
+            up.is_reverse_to(&center, max_increments as i16),
+            false,
+            "Up"
+        );
+        assert_eq!(
+            down.is_reverse_to(&center, max_increments as i16),
+            false,
+            "Down"
+        );
+        assert_eq!(
+            up_left.is_reverse_to(&center, max_increments as i16),
+            true,
+            "Up Left"
+        );
+        assert_eq!(
+            up_right.is_reverse_to(&center, max_increments as i16),
+            false,
+            "Up Right"
+        );
+        assert_eq!(
+            down_left.is_reverse_to(&center, max_increments as i16),
+            true,
+            "Down Left"
+        );
+        assert_eq!(
+            down_right.is_reverse_to(&center, max_increments as i16),
+            false,
+            "Down Right"
+        );
     }
 }
