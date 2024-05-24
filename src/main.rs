@@ -119,55 +119,22 @@ fn setup(gfx: &mut Graphics) -> State {
     }
 }
 
-fn pathfind(state: &mut State, to: IVec2, max_increment: u16) {
+fn pathfind(state: &mut State, to: IVec2, arc: u16, max_increment: u16) {
     let start = Instant::now();
     let start_action = Cell::new(state.agent.rotation, state.agent.position);
     let neighbors_cache = state.neighbor_cache.clone();
 
-    let result = astar(
-        &start_action,
-        |action| {
-            let mut result = Vec::with_capacity(128);
-
-            for neigh in action.neighbors(&neighbors_cache, ARC, max_increment) {
-                if !state
-                    .grid
-                    .is_cell_blocked(neigh.position.x as i32, neigh.position.y as i32)
-                {
-                    let cost = neigh.cost(Some(action.clone()), ARC, max_increment);
-                    let rotation_footprint = state.agent.rotation_footprint(neigh.rotation);
-                    if rotation_footprint.iter().all(|cell| {
-                        !state.grid.is_cell_blocked(
-                            cell.x as i32 + neigh.position.x,
-                            cell.y as i32 + neigh.position.y,
-                        )
-                    }) {
-                        result.push((neigh, cost));
-                    }
-                }
-            }
-
-            result
-        },
-        |action| action.heuristic(to, max_increment),
-        |action| {
-            let (x, y) = (action.position.x as i32, action.position.y as i32);
-            let (goal_x, goal_y) = (to.x as i32, to.y as i32);
-            x == goal_x && y == goal_y
-        },
-    );
-    // let result = optimized_astar(
-    //     start_action,
-    //     PATHFIND_STATE_SIZE,
+    // let result = astar(
+    //     &start_action,
     //     |action| {
     //         let mut result = Vec::with_capacity(128);
 
-    //         for neigh in action.neighbors(&neighbors_cache, ARC, MAX_INCREMENTS) {
+    //         for neigh in action.neighbors(&neighbors_cache, arc, max_increment) {
     //             if !state
     //                 .grid
     //                 .is_cell_blocked(neigh.position.x as i32, neigh.position.y as i32)
     //             {
-    //                 let cost = neigh.cost(Some(action.clone()), ARC, MAX_INCREMENTS);
+    //                 let cost = neigh.cost(Some(action.clone()), arc, max_increment);
     //                 let rotation_footprint = state.agent.rotation_footprint(neigh.rotation);
     //                 if rotation_footprint.iter().all(|cell| {
     //                     !state.grid.is_cell_blocked(
@@ -182,13 +149,46 @@ fn pathfind(state: &mut State, to: IVec2, max_increment: u16) {
 
     //         result
     //     },
-    //     |action| action.heuristic(to, MAX_INCREMENTS),
+    //     |action| action.heuristic(to, max_increment),
     //     |action| {
     //         let (x, y) = (action.position.x as i32, action.position.y as i32);
     //         let (goal_x, goal_y) = (to.x as i32, to.y as i32);
     //         x == goal_x && y == goal_y
     //     },
     // );
+    let result = optimized_astar(
+        start_action,
+        PATHFIND_STATE_SIZE,
+        |action| {
+            let mut result = Vec::with_capacity(128);
+
+            for neigh in action.neighbors(&neighbors_cache, arc, max_increment) {
+                if !state
+                    .grid
+                    .is_cell_blocked(neigh.position.x as i32, neigh.position.y as i32)
+                {
+                    let cost = neigh.cost(Some(action.clone()), arc, max_increment);
+                    let rotation_footprint = state.agent.rotation_footprint(neigh.rotation);
+                    if rotation_footprint.iter().all(|cell| {
+                        !state.grid.is_cell_blocked(
+                            cell.x as i32 + neigh.position.x,
+                            cell.y as i32 + neigh.position.y,
+                        )
+                    }) {
+                        result.push((neigh, cost));
+                    }
+                }
+            }
+
+            result
+        },
+        |action| action.heuristic(to, MAX_INCREMENTS),
+        |action| {
+            let (x, y) = (action.position.x as i32, action.position.y as i32);
+            let (goal_x, goal_y) = (to.x as i32, to.y as i32);
+            x == goal_x && y == goal_y
+        },
+    );
 
     if let Some((path, _)) = result {
         state.path = Some(path.iter().map(|a| a.clone()).collect());
@@ -218,7 +218,7 @@ fn update(app: &mut App, state: &mut State) {
             (x / state.grid.cell_size) as i32,
             (y / state.grid.cell_size) as i32,
         );
-        pathfind(state, IVec2::new(to.0, to.1), MAX_INCREMENTS);
+        pathfind(state, IVec2::new(to.0, to.1), ARC, MAX_INCREMENTS);
     }
     if app.keyboard.is_down(KeyCode::Space) {
         state.agent.rotation = (state.agent.rotation + 1) % MAX_INCREMENTS as i16;
@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn test_pathfind_straight() {
         let mut state = default_state();
-        pathfind(&mut state, IVec2::new(5, 0), 8);
+        pathfind(&mut state, IVec2::new(5, 0), 1, 8);
         assert!(state.path.is_some());
         for i in 0..5 {
             let action = state.path.as_ref().unwrap().get(i).unwrap();
@@ -461,7 +461,7 @@ mod tests {
     fn test_pathfind_diagonal() {
         let mut state = default_state();
         state.agent.rotation = 1;
-        pathfind(&mut state, IVec2::new(5, 5), 8);
+        pathfind(&mut state, IVec2::new(5, 5), 1, 8);
         assert!(state.path.is_some());
         for i in 0..5 {
             let action = state.path.as_ref().unwrap().get(i).unwrap();
@@ -474,13 +474,13 @@ mod tests {
         state.grid.toggle_cell(1, 0);
         state.grid.toggle_cell(1, 1);
         state.grid.toggle_cell(0, 1);
-        pathfind(&mut state, IVec2::new(5, 5), 8);
+        pathfind(&mut state, IVec2::new(5, 5), 1, 8);
         assert!(state.path.is_none());
     }
     #[test]
     fn test_pathfind_turn() {
         let mut state = default_state();
-        pathfind(&mut state, IVec2::new(5, 5), 8);
+        pathfind(&mut state, IVec2::new(5, 5), 1, 8);
         assert!(state.path.is_some());
         let path = state.path.as_ref().unwrap();
 
@@ -504,7 +504,7 @@ mod tests {
     fn test_pathfind_reverse_better_arc() {
         let mut state = default_state();
         state.agent.position = IVec2::new(5, 5);
-        pathfind(&mut state, IVec2::new(5, 6), 8);
+        pathfind(&mut state, IVec2::new(5, 6), 1, 8);
         assert!(state.path.is_some());
         let path = state.path.as_ref().unwrap();
 

@@ -1,6 +1,5 @@
-use binary_heap_plus::BinaryHeap;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use typed_arena::Arena;
 
 #[derive(Debug, Clone)]
