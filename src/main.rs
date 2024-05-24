@@ -14,16 +14,30 @@ use pathfinding::directed::astar::astar;
 pub mod agent;
 pub mod bitarray;
 pub mod cell;
+pub mod pathfind;
 
 use cell::Cell;
 
 use mimalloc::MiMalloc;
 
+use crate::pathfind::optimized_astar;
+
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
+const ARC: u16 = 1;
+const MAX_INCREMENTS: u16 = 32;
+const CELL_SIZE: f32 = 16.0;
+const SCREEN_SIZE: (u32, u32) = (1600, 800);
+const CELL_COUNT: (i32, i32) = (
+    SCREEN_SIZE.0 as i32 / CELL_SIZE as i32,
+    SCREEN_SIZE.1 as i32 / CELL_SIZE as i32,
+);
+const PATHFIND_STATE_SIZE: usize =
+    CELL_COUNT.0 as usize * CELL_COUNT.1 as usize * MAX_INCREMENTS as usize;
+
 #[derive(AppState)]
-struct State {
+pub struct State {
     font: Option<Font>,
     grid: Grid,
     agent: Agent,
@@ -73,13 +87,11 @@ impl Grid {
     }
 }
 
-const ARC: u16 = 1;
-const MAX_INCREMENTS: u16 = 32;
-const CELL_SIZE: f32 = 4.0;
-
 #[notan_main]
 fn main() -> Result<(), String> {
-    let window_config = WindowConfig::new().set_vsync(true).set_size(1400, 1400);
+    let window_config = WindowConfig::new()
+        .set_vsync(true)
+        .set_size(SCREEN_SIZE.0, SCREEN_SIZE.1);
     notan::init_with(setup)
         .add_config(DrawConfig)
         .add_config(window_config)
@@ -93,7 +105,7 @@ fn setup(gfx: &mut Graphics) -> State {
         .create_font(include_bytes!("assets/quicksand.ttf"))
         .expect("Error loading font");
     let cell_size = CELL_SIZE;
-    let grid = Grid::new(cell_size, 1400, 1400);
+    let grid = Grid::new(cell_size, SCREEN_SIZE.0 as i32, SCREEN_SIZE.1 as i32);
     State {
         font: Some(font),
         grid,
@@ -109,7 +121,7 @@ fn setup(gfx: &mut Graphics) -> State {
 
 fn pathfind(state: &mut State, to: IVec2) {
     let start = Instant::now();
-    let start_action = Cell::new(state.agent.rotation, state.agent.position, false);
+    let start_action = Cell::new(state.agent.rotation, state.agent.position);
     let neighbors_cache = state.neighbor_cache.clone();
 
     let result = astar(
@@ -144,6 +156,39 @@ fn pathfind(state: &mut State, to: IVec2) {
             x == goal_x && y == goal_y
         },
     );
+    // let result = optimized_astar(
+    //     start_action,
+    //     PATHFIND_STATE_SIZE,
+    //     |action| {
+    //         let mut result = Vec::with_capacity(128);
+
+    //         for neigh in action.neighbors(&neighbors_cache, ARC, MAX_INCREMENTS) {
+    //             if !state
+    //                 .grid
+    //                 .is_cell_blocked(neigh.position.x as i32, neigh.position.y as i32)
+    //             {
+    //                 let cost = neigh.cost(Some(action.clone()), ARC, MAX_INCREMENTS);
+    //                 let rotation_footprint = state.agent.rotation_footprint(neigh.rotation);
+    //                 if rotation_footprint.iter().all(|cell| {
+    //                     !state.grid.is_cell_blocked(
+    //                         cell.x as i32 + neigh.position.x,
+    //                         cell.y as i32 + neigh.position.y,
+    //                     )
+    //                 }) {
+    //                     result.push((neigh, cost));
+    //                 }
+    //             }
+    //         }
+
+    //         result
+    //     },
+    //     |action| action.heuristic(to, MAX_INCREMENTS),
+    //     |action| {
+    //         let (x, y) = (action.position.x as i32, action.position.y as i32);
+    //         let (goal_x, goal_y) = (to.x as i32, to.y as i32);
+    //         x == goal_x && y == goal_y
+    //     },
+    // );
 
     if let Some((path, _)) = result {
         state.path = Some(path.iter().map(|a| a.clone()).collect());
@@ -250,7 +295,9 @@ fn draw_path_spline(draw: &mut Draw, path: &[Cell], color: Color, cell_size: f32
             }
 
             let next = &path[i + 1];
-            if next.reverse != cell.reverse {
+            let reverse =
+                cell.rotation_to(next.rotation, MAX_INCREMENTS as i16) > MAX_INCREMENTS as i16 / 4;
+            if reverse {
                 reverse_keys.push(i);
                 return true;
             }

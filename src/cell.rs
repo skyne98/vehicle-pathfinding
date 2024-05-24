@@ -14,7 +14,7 @@ use crate::draw_arrow;
 pub type NeighborCacheRef = Rc<RefCell<NeighborCache>>;
 #[derive(Clone, Debug)]
 pub struct NeighborCache {
-    cache: Vec<Vec<(IVec2, i16, bool)>>,
+    cache: Vec<Vec<(IVec2, i16)>>,
     neighbor_xy_to_increment: HashMap<IVec2, i16>,
 }
 
@@ -31,7 +31,7 @@ impl NeighborCache {
         cache
     }
 
-    pub fn get(&self, rotation: i16) -> Option<&Vec<(IVec2, i16, bool)>> {
+    pub fn get(&self, rotation: i16) -> Option<&Vec<(IVec2, i16)>> {
         self.cache.get(rotation as usize)
     }
 
@@ -79,15 +79,22 @@ impl NeighborCache {
 
             for i in -arc..=arc {
                 let new_rotation = Cell::clamp_rotation(rotation + i, max_increments as i16);
-                let cell = Cell::precompute_neighbor(new_rotation, increment_size, false);
-                neighbors.push((cell.position, cell.rotation, cell.reverse));
+                let cell =
+                    Cell::precompute_neighbor(new_rotation, increment_size, false, max_increments);
+                neighbors.push((cell.position, cell.rotation));
             }
 
             let reverse_arc = arc * 2;
+            let opposite_rotation =
+                Cell::clamp_rotation(rotation + max_increments as i16 / 2, max_increments as i16);
+            println!("Rotation: {} -> Opposite: {}", rotation, opposite_rotation);
             for i in -reverse_arc..=reverse_arc {
-                let new_rotation = Cell::clamp_rotation(rotation + i, max_increments as i16);
-                let cell = Cell::precompute_neighbor(new_rotation, increment_size, true);
-                neighbors.push((cell.position, cell.rotation, cell.reverse));
+                let new_rotation =
+                    Cell::clamp_rotation(opposite_rotation + i, max_increments as i16);
+                let cell =
+                    Cell::precompute_neighbor(new_rotation, increment_size, true, max_increments);
+                println!("Opposite Rotation: {} -> Cell: {:#?}", new_rotation, cell);
+                neighbors.push((cell.position, cell.rotation));
             }
 
             // filter out the neighbors which don't follow one of the
@@ -97,13 +104,13 @@ impl NeighborCache {
             // 3. going in reverse
             neighbors = neighbors
                 .into_iter()
-                .filter(|(pos, rot, rev)| {
+                .filter(|(pos, rot)| {
                     let rotation_changed = *rot != rotation;
                     let cardinal = self
                         .neighbor_xy_to_increment
                         .values()
                         .any(|&inc| inc == *rot);
-                    rotation_changed || cardinal || *rev
+                    rotation_changed || cardinal
                 })
                 .collect();
 
@@ -128,53 +135,53 @@ pub struct CostCache {
 pub struct Cell {
     pub rotation: i16,
     pub position: IVec2,
-    pub reverse: bool,
 }
 impl Cell {
-    pub fn new(rotation: i16, start: IVec2, reverse: bool) -> Self {
+    pub fn new(rotation: i16, start: IVec2) -> Self {
         Self {
             rotation,
             position: start,
-            reverse,
         }
     }
-    pub fn precompute_neighbor(rotation: i16, increment_size: f32, reverse: bool) -> Self {
+    pub fn precompute_neighbor(
+        rotation: i16,
+        increment_size: f32,
+        reverse: bool,
+        max_increments: u16,
+    ) -> Self {
         let angle = rotation as f32 * increment_size;
-        let angle = if reverse {
-            angle + std::f32::consts::PI
-        } else {
-            angle
-        };
         let rotation_vector = Vec2::from_angle(angle);
         let x = rotation_vector.x.round() as i32;
         let y = rotation_vector.y.round() as i32;
         let direction_vector = Vec2::new(x.clamp(-1, 1) as f32, y.clamp(-1, 1) as f32);
         let new_position = IVec2::new(direction_vector.x as i32, direction_vector.y as i32);
 
+        let adjusted_rotation = if reverse {
+            Self::opposite_rotation(rotation, max_increments as i16)
+        } else {
+            rotation
+        };
         Self {
             position: new_position,
-            rotation,
-            reverse,
+            rotation: adjusted_rotation,
         }
     }
     pub fn neighbors(&self, cache: &NeighborCacheRef, arc: u16, max_increments: u16) -> Vec<Self> {
         let mut neighbors = Vec::new();
         if let Some(cached) = cache.borrow().get(self.rotation) {
             neighbors = Vec::with_capacity(cached.len());
-            for (position, rotation, reverse) in cached {
+            for (position, rotation) in cached {
                 let new_position = self.position + *position;
                 let new_rotation = *rotation;
-                let new_reverse = *reverse;
                 neighbors.push(Self {
                     position: new_position,
                     rotation: new_rotation,
-                    reverse: new_reverse,
                 });
             }
         }
         neighbors
     }
-    pub fn opposite_rotation(&self, rotation: i16, max_increments: i16) -> i16 {
+    pub fn opposite_rotation(rotation: i16, max_increments: i16) -> i16 {
         let current_rotation = rotation as i32;
         let max_rotation = max_increments as i32;
         let opposite_rotation = current_rotation + max_rotation / 2;
@@ -207,9 +214,12 @@ impl Cell {
         }
     }
     pub fn cost(&self, from: Option<Cell>, arc: u16, max_increments: u16) -> u32 {
-        let reverse_cost = if self.reverse { 10 } else { 1 };
         if let Some(from) = from {
             let rotation = self.rotation_to(from.rotation, max_increments as i16);
+            let reverse = rotation > max_increments as i16 / 4;
+
+            let reverse_cost = if reverse { 100 } else { 1 };
+
             let arc_fraction = rotation as f32 / arc as f32;
             let angle_cost = (arc_fraction * 1000.0) as u32;
 
@@ -231,11 +241,12 @@ impl Cell {
 
     pub fn draw(&self, draw: &mut Draw, font: &Font, cell_size: f32, max_increments: u16) {
         // Define the color based on the reverse flag
-        let color = if self.reverse {
-            Color::RED
-        } else {
-            Color::BLUE
-        };
+        // let color = if self.reverse {
+        //     Color::RED
+        // } else {
+        //     Color::BLUE
+        // };
+        let color = Color::BLUE;
 
         // Calculate the center of the current cell as the starting point
         let center = Vec2::new(
@@ -244,14 +255,8 @@ impl Cell {
         );
 
         // Determine the rotation angle, adjusting for reverse if necessary
-        let rotation_angle = if self.reverse {
-            self.opposite_rotation(self.rotation, max_increments as i16)
-        } else {
-            self.rotation
-        } as f32
-            * 2.0
-            * std::f32::consts::PI
-            / max_increments as f32;
+        let rotation_angle =
+            self.rotation as f32 * 2.0 * std::f32::consts::PI / max_increments as f32;
 
         // Calculate the end point of the arrow based on the rotation angle
         // Ensuring it remains visually centered within the cell
@@ -283,6 +288,6 @@ impl Hash for Cell {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.position.hash(state);
         self.rotation.hash(state);
-        self.reverse.hash(state);
+        // self.reverse.hash(state);
     }
 }

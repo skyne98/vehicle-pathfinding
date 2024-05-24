@@ -12,3 +12,5 @@ pathfinding = "4.9.1"
 splines = { version = "4.3.1", features = ["glam"] }
 geo = "0.28.0"
 mimalloc = "0.1.42"
+typed-arena = "2.0.2"
+binary-heap-plus = "0.5.0"
