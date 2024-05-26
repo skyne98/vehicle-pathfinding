@@ -5,6 +5,7 @@ use std::time::Instant;
 use agent::Agent;
 use bitarray::BitArray;
 use geo::{Simplify, SimplifyIdx};
+use noise::NoiseFn;
 use notan::app::crevice::std140::WriteStd140;
 use notan::draw::*;
 use notan::math::{IVec2, Vec2};
@@ -222,6 +223,25 @@ fn update(app: &mut App, state: &mut State) {
     }
     if app.keyboard.is_down(KeyCode::Space) {
         state.agent.rotation = (state.agent.rotation + 1) % MAX_INCREMENTS as i16;
+    }
+    if app.keyboard.is_down(KeyCode::N) {
+        // generate map with noise
+        let noise = noise::Perlin::new(app.timer.elapsed().as_secs() as u32);
+        for y in 0..state.grid.size.1 {
+            for x in 0..state.grid.size.0 {
+                let value = noise.get([x as f64 * 0.1, y as f64 * 0.1]);
+                if value > 0.5 {
+                    state.grid.cells.set_bool(state.grid.index(x, y), true);
+                } else {
+                    state.grid.cells.set_bool(state.grid.index(x, y), false);
+                }
+            }
+        }
+    }
+    if app.keyboard.is_down(KeyCode::T) {
+        if let Some(path) = &state.path {
+            let last = path.last().unwrap();
+        }
     }
 }
 
